@@ -8,6 +8,7 @@ class Route
 {
   protected static $GET_ROUTES = [];
   protected static $POST_ROUTES = [];
+  protected static $PATCH_ROUTES = [];
 
   private static $NAMED_ROUTES = [];
   private static $catchall_route = "catchall";
@@ -69,6 +70,34 @@ class Route
     }
   }
 
+  public static function patch(string $to, string $controller, array $option = [])
+  {
+    $request_uri = $to;
+    $controller_action = $controller;
+
+    $pair = explode("@", $controller_action, 2);
+    if (count($pair) !== 2) throw new Error("Invalid Controller@action: {$controller_action}");
+
+    self::$PATCH_ROUTES[$request_uri] = [
+      'controller' => $pair[0],
+      'action' => $pair[1],
+    ];
+
+    if (!is_array($option) || empty($option)) return;
+
+    foreach ($option as $option => $value) {
+      if ($value === null || $value === '') continue;
+      self::$PATCH_ROUTES[$request_uri][$option] = $value;
+
+      if ($option !== 'name') continue;
+      if (isset(self::$NAMED_ROUTES[$value])) throw new Error("Route name aleady in use: {$value}");
+      self::$NAMED_ROUTES[$value] = [
+        'method' => 'patch',
+        'path' => $request_uri,
+      ];
+    }
+  }
+
   public static function home(string $controller, array $option = [])
   {
     self::get("/", $controller, $option);
@@ -91,7 +120,7 @@ class Route
 
   public static function all(array $methods = []): array
   {
-    if (empty($methods)) return ['get' => self::$GET_ROUTES, 'post' => self::$POST_ROUTES];
+    if (empty($methods)) return ['get' => self::$GET_ROUTES, 'post' => self::$POST_ROUTES, 'patch' => self::$PATCH_ROUTES];
 
     $routes = [];
     foreach ($methods as $method) {
@@ -103,6 +132,9 @@ class Route
           break;
         case 'post':
           $routes[$method] = self::$POST_ROUTES;
+          break;
+        case 'patch':
+          $routes[$method] = self::$PATCH_ROUTES;
           break;
       }
     }

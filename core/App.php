@@ -16,7 +16,7 @@ class App extends Base
     self::load_env();
     self::set_home_dir();
     self::set_home_url();
-    self::connect_database();
+    // self::connect_database();
     self::load_dependencies();
     self::config('routes'); // load routes
   }
