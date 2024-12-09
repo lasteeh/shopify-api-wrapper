@@ -11,7 +11,7 @@ class ApplicationController extends ActionController
     $this->render(status: 404);
   }
 
-  public function test()
+  public function forms()
   {
     $this->render();
   }

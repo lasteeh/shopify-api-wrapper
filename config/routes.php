@@ -17,4 +17,5 @@ Route::patch('/variants', 'ShopifyApiWrapper@variants');
 Route::catchall('Application@not_found');
 
 // test route
-Route::get('/test', 'Application@test');
+Route::get('/forms', 'Application@forms');
+Route::get('/test', 'ShopifyApiWrapper@test');
