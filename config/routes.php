@@ -12,10 +12,14 @@ Route::get('/products', 'ShopifyApiWrapper@products');
 Route::patch('/variants', 'ShopifyApiWrapper@variants');
 
 
+// vendors
+Route::get('/fulfillment-services', 'FulfillmentServices@index');
+Route::post('/fulfillment-services', 'FulfillmentServices@create');
+Route::get('/fulfillment-services-callback/:endpoint', 'FulfillmentServices@callback');
+Route::post('/fulfillment-services-callback/:endpoint', 'FulfillmentServices@callback');
 
 
 Route::catchall('Application@not_found');
 
 // test route
 Route::get('/forms', 'Application@forms');
-Route::get('/test', 'ShopifyApiWrapper@test');
