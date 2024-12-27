@@ -45,7 +45,7 @@ class Autoloader
     if (file_exists($class_file)) {
       require_once($class_file);
     } else {
-      throw new Error("File does not exist: {$class_file}");
+      // throw new Error("File does not exist: {$class_file}");
     }
   }
 }
