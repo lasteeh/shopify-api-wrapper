@@ -13,9 +13,10 @@ class ShopifyApiWrapperController extends ApplicationController
 
   public function fulfillment_orders()
   {
-    $headers = getallheaders();
 
-    $api_key = $headers['Api-Key'] ?? '';
+    $headers = array_change_key_case(getallheaders(), CASE_LOWER);
+
+    $api_key = $headers['api-key'] ?? '';
     $status = (string) $_GET['status'] ?? null; // assignmentStatus: FULFILLMENT_REQUESTED or CANCELLATION_REQUESTED only
     $orderID = (string) $_GET['orderID'] ?? null;
 
@@ -62,6 +63,7 @@ class ShopifyApiWrapperController extends ApplicationController
                 lineItems(first: 250) {
                   edges {
                     node {
+                      id
                       lineItem {
                         refundableQuantity
                         name
@@ -97,9 +99,10 @@ class ShopifyApiWrapperController extends ApplicationController
 
           $lineItems = [];
           foreach ($node['lineItems']['edges'] as $lineItemEdge) {
-            $lineItem = $lineItemEdge['node']['lineItem'];
+            $lineItemNode = $lineItemEdge['node'];
+            $lineItem = $lineItemNode['lineItem'];
             $lineItems[] = [
-              'lineItemID' => (string) $lineItem['sku'],
+              'lineItemID' => (string) $lineItemNode['id'],
               'productName' => (string) $lineItem['name'],
               'productSku' => (string) $lineItem['sku'],
               'productQuantity' => (int) $lineItem['refundableQuantity'],
@@ -188,7 +191,7 @@ class ShopifyApiWrapperController extends ApplicationController
 
     $data = [];
     $response_code = 200;
-    if (!empty($query_response['fulfillmentOrderAcceptFulfillmentRequest']['userErrors'])) {
+    if (!empty($query_response['data']['fulfillmentOrderAcceptFulfillmentRequest']['userErrors']) || !empty($query_response['errors'])) {
       $response_code = 400;
     }
 
@@ -220,9 +223,7 @@ class ShopifyApiWrapperController extends ApplicationController
         break;
     }
 
-    $data['test'] = $query_response;
-
-    $this->return_json($data);
+    $this->return_json($data, $response_code);
   }
 
   public function fulfillment_order_cancellation()
@@ -255,7 +256,7 @@ class ShopifyApiWrapperController extends ApplicationController
 
     $data = [];
     $response_code = 200;
-    if (!empty($query_response['fulfillmentOrderAcceptFulfillmentRequest']['userErrors'])) {
+    if (!empty($query_response['data']['fulfillmentOrderRejectFulfillmentRequest']['userErrors']) || !empty($query_response['errors'])) {
       $response_code = 400;
     }
 
@@ -287,7 +288,7 @@ class ShopifyApiWrapperController extends ApplicationController
         break;
     }
 
-    $this->return_json($data);
+    $this->return_json($data, $response_code);
   }
 
   public function fulfillments()
@@ -297,14 +298,101 @@ class ShopifyApiWrapperController extends ApplicationController
 
     if (json_last_error() !== JSON_ERROR_NONE) $this->throw_error("Invalid JSON format: " . json_last_error_msg());
 
-    // do graphql query here
-    $data = [];
+    $lineItems = [];
+    $trackingNumbers = [];
+    $trackingURLs = [];
+    $fulfillmentOrderIds = [];
 
+    foreach ($json['orders'] as $order) {
+      foreach ($order['fulfillmentOrders'] as $fulfillmentOrder) {
+        $currentLineItems = [];
+        foreach ($fulfillmentOrder['lineItems'] as $lineItem) {
+          $currentLineItems[] = [
+            'id' => $lineItem['lineItemID'],
+            'quantity' => $lineItem['productQuantity'],
+          ];
+        }
+
+        $lineItems[] = [
+          'fulfillmentOrderId' => $fulfillmentOrder['fulfillmentOrderId'],
+          'fulfillmentOrderLineItems' => $currentLineItems,
+        ];
+
+        $fulfillmentOrderIds[] = $fulfillmentOrder['fulfillmentOrderId'];
+
+        if (isset($fulfillmentOrder['trackingNumber'])) {
+          $trackingNumbers[] = $fulfillmentOrder['trackingNumber'];
+        };
+
+        if (isset($fulfillmentOrder['trackingURL'])) {
+          $trackingURLs[] = $fulfillmentOrder['trackingURL'];
+        };
+      }
+    }
+
+
+
+    // do graphql query here
+    $query = [
+      'query' => '
+        mutation {
+          fulfillmentCreate(
+              fulfillment: {
+                  lineItemsByFulfillmentOrder: ' . $this->array_to_graphql($lineItems) . ',
+                  trackingInfo: {
+                      company: "test company",
+                      numbers: ' . $this->array_to_graphql($trackingNumbers) . ',
+                      urls: ' . $this->array_to_graphql($trackingURLs) . '
+                  }
+              }
+          ) {
+              userErrors {
+                  field
+                  message
+              }
+          }
+        }
+      ',
+    ];
+
+    $query_response = $this->request_graphql($query, $_ENV['SHOP_NAME'], $_ENV['ACCESS_TOKEN']);
+
+
+    $data = [];
+    $response_code = 200;
+    if (!empty($query_response['data']['fulfillmentCreate']['userErrors']) || !empty($query_response['errors'])) {
+      $response_code = 400;
+    }
 
     // return json here
-    $data = $json;
+    switch ($response_code) {
+      case 200:
+        $data = [
+          "status" => (string) "success",
+          "fulfillmentID" => $fulfillmentOrderIds[0],
+        ];
+        break;
+      case 400:
+        $data = [
+          "status" => "error",
+          "message" => "Invalid request",
+        ];
+        break;
+      case 403:
+        $data = [
+          "status" => "error",
+          "message" => "Access denied",
+        ];
+        break;
+      case 429:
+        $data = [
+          "status" => "error",
+          "message" => "Too many requests",
+        ];
+        break;
+    }
 
-    $this->return_json($data);
+    $this->return_json($data, $response_code);
   }
 
   public function products()
@@ -391,97 +479,92 @@ class ShopifyApiWrapperController extends ApplicationController
         break;
     }
 
-    $this->return_json($data);
+    $this->return_json($data, $response_code);
   }
 
   public function variants()
   {
+    $headers = array_change_key_case(getallheaders(), CASE_LOWER);
+
+    $api_key = $headers['api-key'] ?? '';
+    $fulfillment_service = FulfillmentService::find_by(['api_key' => $api_key]);
+    $location_id = $fulfillment_service->location_id;
+
     $input = file_get_contents('php://input');
     $json = json_decode($input, true);
 
     if (json_last_error() !== JSON_ERROR_NONE) $this->throw_error("Invalid JSON format: " . json_last_error_msg());
 
     // do graphql query here
-    $product_id = $json['productId'] ?? null;
     $variants = $json['variants'] ?? [];
-    $variant_inputs_for_price_update = [];
+    $product_id = $variants[0]['productId'] ?? '';
 
+    // check if all product id is same
     foreach ($variants as $variant) {
-      $variant_inputs_for_price_update[] =
-        '{
-          id: "' . $variant['variantID'] . '"
-          ' . (isset($variant['price']) ? 'price: ' . $variant['price'] : '') . '
-        }';
+      $variant_product_id = $variant['productId'] ?? '';
+      if ($product_id !== $variant_product_id) $this->throw_error("Invalid request: err:ProdID");
     }
 
-    $price_mutation = [
+    $variant_items = [];
+    foreach ($variants as $variant) {
+      if (!isset($variant['price']) && !isset($variant['quantity'])) continue;
+
+      $variant_changes = [
+        'id' => $variant['variantID'] ?? '',
+      ];
+
+      if (isset($variant['price'])) {
+        $variant_changes['price'] =  (float) $variant['price'];
+      }
+
+      $variant_items[] = $variant_changes;
+    }
+
+    $product_mutation = [
       'query' => '
         mutation {
           productVariantsBulkUpdate(
-            productId: "' . $product_id . '",
-            variants: [' . implode(",", $variant_inputs_for_price_update)  . ']
+            productId: "' . $product_id . '"
+            variants: ' . $this->array_to_graphql($variant_items) . '
           ) {
-            product { id }
             productVariants {
               id
-              price
               inventoryItem {
                 id
-                inventoryLevels(first: 250) {
-                  nodes {
-                    location {
-                      id
-                    }
-                  }
-                }
               }
-              inventoryQuantity
             }
             userErrors {
               field
               message
+              code
             }
           }
         }
       ',
     ];
 
-    $price_mutation_response = $this->request_graphql($price_mutation, $_ENV['SHOP_NAME'], $_ENV['ACCESS_TOKEN']);
-    $price_response_errors = $price_mutation_response['data']['productVariantsBulkUpdate']['userErrors'] ?? [];
+    $product_mutation_response = $this->request_graphql($product_mutation, $_ENV['SHOP_NAME'], $_ENV['ACCESS_TOKEN']);
 
-    if (!empty($price_response_errors)) {
-      $data = [
-        "status" => "error",
-        "message" => "Invalid request",
-      ];
-      $this->return_json($data);
+    if (!empty($product_mutation_response['data']['productVariantsBulkUpdate']['userErrors']) || !empty($product_mutation_response['errors'])) {
+      $this->throw_error("Invalid request: err:PrcMut");
     }
 
-    $variant_location_map = [];
-
-    foreach ($price_mutation_response['data']['productVariantsBulkUpdate']['productVariants'] as $variant) {
-      $variant_id = $variant['id'] ?? '';
-      $variant_inventory_id = $variant['inventoryItem']['id'] ?? '';
-      $variant_locations = $variant['inventoryItem']['inventoryLevels']['nodes'] ?? [];
-
-      $variant_location_map[$variant_id] = [
-        'locations' => $variant_locations,
-        'inventoryItemId' => $variant_inventory_id,
-      ];
+    $response_variants = $product_mutation_response['data']['productVariantsBulkUpdate']['productVariants'] ?? [];
+    $variant_inventory_id_map = [];
+    foreach ($response_variants as $response_variant) {
+      $variant_inventory_id_map[$response_variant['id']] = $response_variant['inventoryItem']['id'];
     }
 
-
-    $inventory_inputs_for_quantity_update = [];
+    $variants_inventory_changes = [];
 
     foreach ($variants as $variant) {
-      $variant_inventory_id = $variant_location_map[$variant['variantID']]['inventoryItemId'] ?? '';
-      $variant_quantity = (isset($variant['quantity']) ? 'delta: ' . $variant['quantity'] : '');
-
-      $inventory_inputs_for_quantity_update[] =
-        "\n" . '{
-          inventoryItemId: "' . $variant_inventory_id . '" 
-          ' . $variant_quantity . ' 
-        }';
+      if (!empty($variant_inventory_id_map[$variant['variantID']]) && isset($variant['quantity'])) {
+        $variants_inventory_changes[] = [
+          'delta' => $variant['quantity'],
+          'inventoryItemId' => $variant_inventory_id_map[$variant['variantID']],
+          'locationId' => $location_id,
+        ];
+      }
     }
 
     $inventory_mutation = [
@@ -489,16 +572,15 @@ class ShopifyApiWrapperController extends ApplicationController
         mutation {
           inventoryAdjustQuantities(
             input: {
-              changes: [' . implode(",", $inventory_inputs_for_quantity_update) . ']
+              name: "available", 
+              changes: ' . $this->array_to_graphql($variants_inventory_changes) . ', 
               reason: "correction"
-              name: "available"
             }
           ) {
-            inventoryAdjustmentGroup {
-              changes {
-                name
-                quantityAfterChange
-              }
+            userErrors {
+              code
+              field
+              message
             }
           }
         }
@@ -508,9 +590,41 @@ class ShopifyApiWrapperController extends ApplicationController
     $inventory_mutation_response = $this->request_graphql($inventory_mutation, $_ENV['SHOP_NAME'], $_ENV['ACCESS_TOKEN']);
 
     $data = [];
+    $response_code = 200;
+    if (!empty($inventory_mutation_response['data']['inventoryAdjustQuantities']['userErrors']) || !empty($inventory_mutation_response['errors'])) {
+      // $this->throw_error("Invalid request: err:invAdjQty");
+      $response_code = 400;
+    }
 
     // return json here
-    $this->return_json(['price_mutation_response' => $price_mutation_response, 'inventory_mutation_response' => $inventory_mutation_response, 'inventory_mutation_query' => $inventory_mutation, 'location_map' => $variant_location_map]);
+    switch ($response_code) {
+      case 200:
+        $data = [
+          "status" => (string) "success",
+          "message" => "Variant(s) updated",
+        ];
+        break;
+      case 400:
+        $data = [
+          "status" => "error",
+          "message" => "Invalid request",
+        ];
+        break;
+      case 403:
+        $data = [
+          "status" => "error",
+          "message" => "Access denied",
+        ];
+        break;
+      case 429:
+        $data = [
+          "status" => "error",
+          "message" => "Too many requests",
+        ];
+        break;
+    }
+
+    $this->return_json($data, $response_code);
   }
 
   /************************/
@@ -524,24 +638,59 @@ class ShopifyApiWrapperController extends ApplicationController
 
   protected function only_accept_json()
   {
-    if ($_SERVER['CONTENT_TYPE'] === 'application/json') return;
+    $headers = array_change_key_case(getallheaders(), CASE_LOWER);
+    if (!empty($headers['content-type']) && $headers['content-type'] === 'application/json') return;
     $this->throw_error("Invalid request. Only accepts 'application/json'.");
   }
 
   protected function authenticate_request()
   {
-    $headers = getallheaders();
-    if (!isset($headers['Api-Key'])) $this->throw_error("Api-Key required");
 
-    $fulfillment_service = FulfillmentService::find_by(['api_key' => $headers['Api-Key']]);
-    if (empty($fulfillment_service)) $this->throw_error("Invalid Api-Key");
+    $headers = array_change_key_case(getallheaders(), CASE_LOWER);
+    if (!isset($headers['api-key'])) $this->throw_error("API-KEY required");
+
+    $fulfillment_service = FulfillmentService::find_by(['api_key' => $headers['api-key']]);
+    if (empty($fulfillment_service)) $this->throw_error("Access denied", 403);
   }
 
-  private function return_json(array $data, int $status = 200)
+  protected function return_json(array $data, int $status = 200)
   {
     http_response_code($status);
     header('Content-Type: application/json');
     echo json_encode($data);
     exit;
+  }
+
+  private function array_to_graphql(array $array): string
+  {
+    $graphql = '[';
+    if (!empty($array)) {
+      foreach ($array as $item) {
+        if (is_array($item)) {
+          $graphql .= '{';
+          foreach ($item as $key => $value) {
+            if (is_array($value)) {
+              $value = $this->array_to_graphql($value);
+            } else if (is_string($value)) {
+              $value = '"' . $value . '",';
+            } else if (is_int($value)) {
+              $value = (int) $value . ',';
+            } else if (is_float($value)) {
+              $value = (float) $value . ',';
+            }
+            $graphql .= "{$key}: {$value},";
+          }
+          $graphql = rtrim($graphql, ",") . '},';
+        } else if (is_string($item)) {
+          $graphql .= '"' . $item . '",';
+        } else if (is_int($item)) {
+          $graphql .= (int) $item . ',';
+        } else if (is_float($item)) {
+          $graphql .= (float) $item . ',';
+        }
+      }
+    }
+    $graphql = rtrim($graphql, ",") . ']';
+    return $graphql;
   }
 }

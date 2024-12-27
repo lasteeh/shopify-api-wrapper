@@ -58,8 +58,13 @@
     }
   }
 
-  #generator {
+  #note {
     margin-block-start: 2em;
+
+    & p {
+      font-size: 0.75rem;
+      color: red;
+    }
   }
 </style>
 
@@ -348,9 +353,9 @@ $notices = $this->flash('notices');
       <button type="submit">Create</button>
     </form>
 
-    <div id="generator">
-      <button type="button">Generate API</button>
-      <input id="generated-api" type="text" readonly>
+    <div id="note">
+      <p>* Please generate an API KEY by creating a private app in shopify admin dashboard.</p>
+      <p>* A generated fulfillment service can only be queried, updated, edited, or removed by the API key that created it.</p>
     </div>
   </div>
   <div id="table">
@@ -374,33 +379,3 @@ $notices = $this->flash('notices');
     <?php endif; ?>
   </div>
 </div>
-
-<script>
-  document.addEventListener('DOMContentLoaded', function() {
-    const app = {
-      apiGenerator: function() {
-        let button = document.querySelector("#generator button");
-        if (!button) return;
-
-        button.addEventListener("click", () => {
-          let inputfield = document.querySelector("#generated-api");
-          if (!inputfield) return;
-
-          const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-';
-          const keyLength = 32;
-
-          let apiKey = '';
-          for (let i = 0; i < keyLength; i++) {
-            const randomIndex = Math.floor(Math.random() * characters.length);
-            apiKey += characters[randomIndex];
-          }
-          inputfield.value = apiKey;
-        });
-      },
-    };
-
-    window.addEventListener("load", function() {
-      app.apiGenerator();
-    });
-  });
-</script>
